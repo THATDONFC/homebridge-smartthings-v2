@@ -4,14 +4,14 @@
  *  Copyright 2018, 2019, 2020 Anthony Santilli
  */
 
-String appVersion()                     { return "2.2.2" }
-String appModified()                    { return "02-20-2020" }
+String appVersion()                     { return "2.3.2" }
+String appModified()                    { return "03-02-2020" }
 String branch()                         { return "master" }
 String platform()                       { return "SmartThings" }
 String pluginName()                     { return "${platform()}-v2" }
 String appIconUrl()                     { return "https://raw.githubusercontent.com/tonesto7/homebridge-smartthings-v2/${branch()}/images/hb_tonesto7@2x.png" }
 String getAppImg(imgName, ext=".png")   { return "https://raw.githubusercontent.com/tonesto7/homebridge-smartthings-v2/${branch()}/images/${imgName}${ext}" }
-Map minVersions()                       { return [plugin: 221] }
+Map minVersions()                       { return [plugin: 232] }
 
 definition(
     name: "Homebridge v2",
@@ -26,6 +26,7 @@ definition(
 
 {
     appSetting "devMode"
+    appSetting "log_address"
 }
 
 preferences {
@@ -45,10 +46,14 @@ preferences {
 }
 
 private Map ignoreLists() {
-    return [
+    Boolean noPwr = true
+    Boolean noEnr = true
+    Map o = [
         commands: ["indicatorWhenOn", "indicatorWhenOff", "ping", "refresh", "indicatorNever", "configure", "poll", "reset"],
-        attributes: ['DeviceWatch-Enroll', 'DeviceWatch-Status', "checkInterval", "LchildVer", "FchildVer", "LchildCurr", "FchildCurr", "lightStatus", "lastFanMode", "lightLevel",
-            "coolingSetpointRange", "heatingSetpointRange", "thermostatSetpointRange", "energy", "power"],
+        attributes: [
+            'DeviceWatch-Enroll', 'DeviceWatch-Status', "checkInterval", "LchildVer", "FchildVer", "LchildCurr", "FchildCurr", "lightStatus", "lastFanMode", "lightLevel",
+            "coolingSetpointRange", "heatingSetpointRange", "thermostatSetpointRange"
+        ],
         evt_attributes: [
             'DeviceWatch-DeviceStatus', "DeviceWatch-Enroll", 'checkInterval', 'devTypeVer', 'dayPowerAvg', 'apiStatus', 'yearCost', 'yearUsage','monthUsage', 'monthEst', 'weekCost', 'todayUsage',
             'maxCodeLength', 'maxCodes', 'readingUpdated', 'maxEnergyReading', 'monthCost', 'maxPowerReading', 'minPowerReading', 'monthCost', 'weekUsage', 'minEnergyReading',
@@ -57,18 +62,22 @@ private Map ignoreLists() {
             'speed', 'verticalAccuracyMetric', 'altitude', 'indicatorStatus', 'todayCost', 'longitude', 'distance', 'previousPlace','closestPlace', 'places', 'minCodeLength',
             'arrivingAtPlace', 'lastUpdatedDt', 'scheduleType', 'zoneStartDate', 'zoneElapsed', 'zoneDuration', 'watering', 'eventTime', 'eventSummary', 'endOffset', 'startOffset',
             'closeTime', 'endMsgTime', 'endMsg', 'openTime', 'startMsgTime', 'startMsg', 'calName', "deleteInfo", "eventTitle", "floor", "sleeping", "powerSource", "batteryStatus",
-            "LchildVer", "FchildVer", "LchildCurr", "FchildCurr", "lightStatus", "lastFanMode", "lightLevel", "coolingSetpointRange", "heatingSetpointRange", "thermostatSetpointRange", "energy", "power"
+            "LchildVer", "FchildVer", "LchildCurr", "FchildCurr", "lightStatus", "lastFanMode", "lightLevel", "coolingSetpointRange", "heatingSetpointRange", "thermostatSetpointRange",
+            "colorName", "locationForURL", "location", "offsetNotify"
         ],
         capabilities: ["Health Check", "Ultraviolet Index", "Indicator", "Window Shade Preset"]
     ]
+    if(noPwr) { o?.attributes?.push("power"); o?.evt_attributes?.push("power"); o?.capabilities?.push("Power Meter") }
+    if(noEnr) { o?.attributes?.push("energy"); o?.evt_attributes?.push("energy"); o?.capabilities?.push("Energy Meter") }
+    return o
 }
 
 def startPage() {
     if(!state?.installData) { state?.installData = [initVer: appVersion(), dt: getDtNow().toString(), updatedDt: getDtNow().toString(), shownDonation: false] }
     checkVersionData(true)
     if(showChgLogOk()) { return changeLogPage() }
-    else if(showDonationOk()) { return donationPage() }
-    else { return mainPage() }
+    if(showDonationOk()) { return donationPage() }
+    return mainPage()
 }
 
 def mainPage() {
@@ -78,7 +87,7 @@ def mainPage() {
         appInfoSect()
         section("Define Specific Categories:") {
             paragraph "Each category below will adjust the device attributes to make sure they are recognized as the desired device type under HomeKit.\nNOTICE: Don't select the same devices used here in the Select Your Devices Input below.", state: "complete"
-            Boolean conf = (lightList || buttonList || fanList || fan3SpdList || fan4SpdList || speakerList || shadesList || tstatHeatList)
+            Boolean conf = (lightList || buttonList || fanList || fan3SpdList || fan4SpdList || speakerList || shadesList || garageList || tstatList || tstatHeatList)
             Integer fansize = (fanList?.size() ?: 0) + (fan3SpdList?.size() ?: 0) + (fan4SpdList?.size() ?: 0)
             String desc = "Tap to configure"
             if(conf) {
@@ -88,6 +97,8 @@ def mainPage() {
                 desc += (fanList || fan3SpdList || fan4SpdList) ? "(${fansize}) Fan Devices\n" : ""
                 desc += speakerList ? "(${speakerList?.size()}) Speaker Devices\n" : ""
                 desc += shadesList ? "(${shadesList?.size()}) Shade Devices\n" : ""
+                desc += garageList ? "(${garageList?.size()}) Garage Door Devices\n" : ""
+                desc += tstatList ? "(${tstatList?.size()}) Tstat Devices\n" : ""
                 desc += tstatHeatList ? "(${tstatHeatList?.size()}) Tstat Heat Devices\n" : ""
                 desc += "\nTap to modify..."
             }
@@ -110,8 +121,10 @@ def mainPage() {
         inputDupeValidation()
 
         section("Capability Filtering:") {
-            Boolean conf = (removeBattery || removeButton || removeContact || removeEnergy || removeHumidity || removeIlluminance || removeLevel || removeLock || removeMotion || removePower || removePresence ||
-            removeSwitch || removeTamper || removeTemp || removeValve)
+            Boolean conf = (
+                removeAcceleration || removeBattery || removeButton || removeContact || removeEnergy || removeHumidity || removeIlluminance || removeLevel || removeLock || removeMotion ||
+                removePower || removePresence || removeSwitch || removeTamper || removeTemp || removeValve
+            )
             href "capFilterPage", title: "Filter out capabilities from your devices", required: false, image: getAppImg("filter"), state: (conf ? "complete" : null), description: (conf ? "Tap to modify..." : "Tap to configure")
         }
 
@@ -164,12 +177,32 @@ def mainPage() {
     }
 }
 
+def deviceValidationErrors() {
+    /*
+        NOTE: Determine what we require to determine the thermostat a thermostat so we can support devices like Flair which are custom heat-only thermostats.
+    */
+    Map reqs = [
+        tstat: [ c:["Thermostat Operating State"], a: [r: ["thermostatOperatingState"], o: ["heatingSetpoint", "coolingSetpoint"]] ],
+        tstat_heat: [
+            c: ["Thermostat Operating State"],
+            a: [
+                r: ["thermostatOperatingState", "heatingSetpoint"],
+                o: []
+            ]
+        ]
+    ]
+
+    // if(tstatHeatList || tstatList) {}
+    return reqs
+}
+
 def defineDevicesPage() {
     return dynamicPage(name: "defineDevicesPage", title: "", install: false, uninstall: false) {
         section("Define Specific Categories:") {
             paragraph "NOTE: Please do not select a device here and then again in another input below."
             paragraph "Each category below will adjust the device attributes to make sure they are recognized as the desired device type under HomeKit", state: "complete"
             input "lightList", "capability.switch", title: "Lights: (${lightList ? lightList?.size() : 0} Selected)", multiple: true, submitOnChange: true, required: false, image: getAppImg("light_on")
+            input "garageList", "capability.garageDoorControl", title: "Garage Doors: (${garageList ? garageList?.size() : 0} Selected)", multiple: true, submitOnChange: true, required: false, image: getAppImg("garage_door")
             input "buttonList", "capability.button", title: "Buttons: (${buttonList ? buttonList?.size() : 0} Selected)", multiple: true, submitOnChange: true, required: false, image: getAppImg("button")
             input "speakerList", "capability.switch", title: "Speakers: (${speakerList ? speakerList?.size() : 0} Selected)", multiple: true, submitOnChange: true, required: false, image: getAppImg("media_player")
             input "shadesList", "capability.windowShade", title: "Window Shades: (${shadesList ? shadesList?.size() : 0} Selected)", multiple: true, submitOnChange: true, required: false, image: getAppImg("window_shade")
@@ -180,7 +213,8 @@ def defineDevicesPage() {
             input "fan4SpdList", "capability.switch", title: "Fans (4 Speeds): (${fan4SpdList ? fan4SpdList?.size() : 0} Selected)", multiple: true, submitOnChange: true, required: false, image: getAppImg("fan_on")
         }
         section("Thermostats") {
-            input "tstatHeatList", "capability.thermostat", title: "Heat Only Thermostat: (${tstatHeatList ? tstatHeatList?.size() : 0} Selected)", multiple: true, submitOnChange: true, required: false, image: getAppImg("thermostat")
+            input "tstatList", "capability.thermostat", title: "Thermostats: (${tstatList ? tstatList?.size() : 0} Selected)", multiple: true, submitOnChange: true, required: false, image: getAppImg("thermostat")
+            input "tstatHeatList", "capability.thermostat", title: "Heat Only Thermostats: (${tstatHeatList ? tstatHeatList?.size() : 0} Selected)", multiple: true, submitOnChange: true, required: false, image: getAppImg("thermostat")
         }
     }
 }
@@ -210,10 +244,10 @@ def settingsPage() {
 }
 
 private resetAppToken() {
-    log.warn "resetAppToken | Current Access Token Removed..."
+    logWarn("resetAppToken | Current Access Token Removed...")
     state.remove("accessToken")
     if(getAccessToken()) {
-        log.info "resetAppToken | New Access Token Created..."
+        logInfo("resetAppToken | New Access Token Created...")
     }
 }
 
@@ -229,7 +263,9 @@ private resetCapFilters() {
 private inputDupeValidation() {
     Map clnUp = [d: [:], o: [:]]
     Map items = [
-        d: ["fanList": "Fans", "fan3SpdList": "Fans (3-Speed)", "fan4SpdList": "Fans (4-Speed)", "buttonList": "Buttons", "lightList": "Lights", "shadesList": "Window Shadse", "speakerList": "Speakers", "tstatHeatList": "Thermostat (Heat Only)"],
+        d: ["fanList": "Fans", "fan3SpdList": "Fans (3-Speed)", "fan4SpdList": "Fans (4-Speed)", "buttonList": "Buttons", "lightList": "Lights", "shadesList": "Window Shadse", "speakerList": "Speakers",
+            "garageList": "Garage Doors", "tstatList": "Thermostat", "tstatHeatList": "Thermostat (Heat Only)"
+        ],
         o: ["deviceList": "Other", "sensorList": "Sensor", "switchList": "Switch"]
     ]
     items?.d?.each { k, v->
@@ -318,6 +354,7 @@ def capFilterPage() {
         }
         section("Remove Capabilities from Devices") {
             paragraph "This will allow you to filter out certain capabilities from creating unwanted devices under HomeKit"
+            input "removeAcceleration", "capability.accelerationSensor", title: "Remove Acceleration from these Devices", multiple: true, submitOnChange: true, required: false, image: getAppImg("acceleration")
             input "removeBattery", "capability.battery", title: "Remove Battery from these Devices", multiple: true, submitOnChange: true, required: false, image: getAppImg("battery")
             input "removeButton", "capability.button", title: "Remove Buttons from these Devices", multiple: true, submitOnChange: true, required: false, image: getAppImg("button")
             input "removeContact", "capability.contactSensor", title: "Remove Contact from these Devices", multiple: true, submitOnChange: true, required: false, image: getAppImg("contact")
@@ -386,15 +423,17 @@ def deviceDebugPage() {
     return dynamicPage(name: "deviceDebugPage", title: "", install: false, uninstall: false) {
         section("All Other Devices:") {
             paragraph "Have a device that's not working under homekit like you want?\nSelect a device from one of the inputs below and it will show you all data about the device.", state: "complete", image: getAppImg("info")
-            if(!debug_switch && !debug_other && !debug_garage)
+            if(!debug_switch && !debug_other && !debug_garage && !debug_tstat)
                 input "debug_sensor", "capability.sensor", title: "Sensors: ", multiple: false, submitOnChange: true, required: false, image: getAppImg("sensors")
-            if(!debug_sensor && !debug_other && !debug_garage)
+            if(!debug_sensor && !debug_other && !debug_garage && !debug_tstat)
                 input "debug_switch", "capability.actuator", title: "Switches: ", multiple: false, submitOnChange: true, required: false, image: getAppImg("switch")
-            if(!debug_switch && !debug_sensor && !debug_garage)
+            if(!debug_switch && !debug_sensor && !debug_garage && !debug_tstat)
                 input "debug_other", "capability.refresh", title: "Others Devices: ", multiple: false, submitOnChange: true, required: false, image: getAppImg("devices2")
             if(!debug_sensor && !debug_other && !debug_switch)
-                input "debug_garage", "capability.garageDoor", title: "Garage Doors: ", multiple: false, submitOnChange: true, required: false, image: getAppImg("garage")
-            if(debug_other || debug_sensor || debug_switch || debug_garage) {
+                input "debug_garage", "capability.garageDoorControl", title: "Garage Doors: ", multiple: false, submitOnChange: true, required: false, image: getAppImg("garage_door")
+            if(!debug_sensor && !debug_other && !debug_switch && !debug_garage)
+                input "debug_tstat", "capability.thermostat", title: "Thermostats: ", multiple: false, submitOnChange: true, required: false, image: getAppImg("thermostat")
+            if(debug_other || debug_sensor || debug_switch || debug_garage || debug_tstat) {
                 href url: getAppEndpointUrl("deviceDebug"), style: "embedded", required: false, title: "Tap here to view Device Data...", description: "", state: "complete", image: getAppImg("info")
             }
         }
@@ -406,6 +445,7 @@ public clearTestDeviceItems() {
     settingRemove("debug_switch")
     settingRemove("debug_other")
     settingRemove("debug_garage")
+    settingRemove("debug_tstat")
 }
 
 def viewDeviceDebug() {
@@ -414,6 +454,7 @@ def viewDeviceDebug() {
     if(debug_sensor) sDev = debug_sensor
     if(debug_switch) sDev = debug_switch
     if(debug_garage) sDev = debug_garage
+    if(debug_tstat)  sDev = debug_tstat
     def json = new groovy.json.JsonOutput().toJson(getDeviceDebugMap(sDev))
     def jsonStr = new groovy.json.JsonOutput().prettyPrint(json)
     render contentType: "application/json", data: jsonStr
@@ -439,7 +480,7 @@ def getDeviceDebugMap(dev) {
             r?.eventHistory = dev?.eventsSince(new Date() - 1, [max: 20])?.collect { "${it?.date} | [${it?.name}] | (${it?.value}${it?.unit ? " ${it?.unit}" : ""})" };
             dev?.supportedAttributes?.collect { it?.name as String }?.unique()?.sort()?.each { r?.attributes[it] = dev?.currentValue(it as String); };
         } catch(ex) {
-            log.error("Error while generating device data: ", ex);
+            logError("Error while generating device data: ", ex);
         }
     }
     return r
@@ -458,14 +499,14 @@ def getDeviceCnt(phyOnly=false) {
 }
 
 def installed() {
-    log.debug "${app.name} | installed() has been called..."
+    logDebug("${app.name} | installed() has been called...")
     state?.isInstalled = true
     state?.installData = [initVer: appVersion(), dt: getDtNow().toString(), updatedDt: "Not Set", showDonation: false, shownChgLog: true]
     initialize()
 }
 
 def updated() {
-    log.debug "${app.name} | updated() has been called..."
+    logDebug("${app.name} | updated() has been called...")
     state?.isInstalled = true
     if(!state?.installData) { state?.installData = [initVer: appVersion(), dt: getDtNow().toString(), updatedDt: getDtNow().toString(), shownDonation: false] }
     unsubscribe()
@@ -477,31 +518,32 @@ def initialize() {
     if(getAccessToken()) {
         subscribeToEvts()
         runEvery5Minutes("healthCheck")
-    } else { log.error "initialize error: Unable to get or generate smartapp access token" }
+    } else { logError("initialize error: Unable to get or generate smartapp access token") }
 }
 
 def getAccessToken() {
     try {
         if(!atomicState?.accessToken) {
             atomicState?.accessToken = createAccessToken();
-            if(showDebugLogs) log.debug "SmartApp Access Token Missing... Generating New Token!!!"
+            logDebug("SmartApp Access Token Missing... Generating New Token!!!")
             return true;
-        } else { return true }
+        }
+        return true
     } catch (ex) {
         def msg = "Error: OAuth is not Enabled for ${appName()}!. Please click remove and Enable Oauth under the SmartApp App Settings in the IDE"
-        log.error "getAccessToken Exception: ${msg}"
+        logError("getAccessToken Exception: ${msg}")
         return false
     }
 }
 
 private subscribeToEvts() {
     runIn(4, "registerDevices")
-    log.info "Starting Device Subscription Process"
+    logInfo("Starting Device Subscription Process")
     if(settings?.addSecurityDevice) {
         subscribe(location, "alarmSystemStatus", changeHandler)
     }
     if(settings?.modeList) {
-        if(showDebugLogs) log.debug "Registering (${settings?.modeList?.size() ?: 0}) Virtual Mode Devices"
+        logDebug("Registering (${settings?.modeList?.size() ?: 0}) Virtual Mode Devices")
         subscribe(location, "mode", changeHandler)
         if(state?.lastMode == null) { state?.lastMode = location?.mode?.toString() }
     }
@@ -509,7 +551,7 @@ private subscribeToEvts() {
     subscribe(app, onAppTouch)
     if(settings?.sendCmdViaHubaction != false) { subscribe(location, null, lanEventHandler, [filterEvents:false]) }
     if(settings?.routineList) {
-        if(showDebugLogs) log.debug "Registering (${settings?.routineList?.size() ?: 0}) Virtual Routine Devices"
+        logDebug("Registering (${settings?.routineList?.size() ?: 0}) Virtual Routine Devices")
         subscribe(location, "routineExecuted", changeHandler)
     }
 }
@@ -517,13 +559,13 @@ private subscribeToEvts() {
 private healthCheck() {
     checkVersionData()
     if(checkIfCodeUpdated()) {
-        log.warn("Code Version Change Detected... Health Check will occur on next cycle.")
+        logWarn("Code Version Change Detected... Health Check will occur on next cycle.")
         return
     }
 }
 
 private checkIfCodeUpdated() {
-    if(showDebugLogs) log.debug("Code versions: ${state?.codeVersions}")
+    logDebug("Code versions: ${state?.codeVersions}")
     if(state?.codeVersions) {
         if(state?.codeVersions?.mainApp != appVersion()) {
             checkVersionData(true)
@@ -536,7 +578,7 @@ private checkIfCodeUpdated() {
                 iData["shownDonation"] = false
             }
             atomicState?.installData = iData
-            log.info("Code Version Change Detected... | Re-Initializing SmartApp in 5 seconds")
+            logInfo("Code Version Change Detected... | Re-Initializing SmartApp in 5 seconds")
             return true
         }
     }
@@ -572,7 +614,7 @@ def renderDevices() {
                     Map devObj = getDeviceData(item, dev) ?: [:]
                     if(devObj?.size()) { devMap[dev] = devObj }
                 } catch (e) {
-                    log.error("Device (${dev?.displayName}) Render Exception: ${ex.message}")
+                    logError("Device (${dev?.displayName}) Render Exception: ${ex.message}")
                 }
             }
         }
@@ -619,7 +661,7 @@ def getDeviceData(type, sItem) {
             // Define firmware variable and initialize it out of device handler attribute`
             try {
                 if (sItem?.hasAttribute("firmware")) { firmware = sItem?.currentValue("firmware")?.toString() }
-            } catch (ex) { }
+            } catch (ex) { firmware = null }
             break
     }
     if(curType && obj) {
@@ -638,7 +680,8 @@ def getDeviceData(type, sItem) {
             deviceflags: !isVirtual ? getDeviceFlags(sItem) : optFlags,
             attributes: !isVirtual ? deviceAttributeList(sItem) : ["switch": attrVal]
         ]
-    } else { return null }
+    }
+    return null
 }
 
 String modeSwitchState(String mode) {
@@ -705,7 +748,7 @@ def getSecurityStatus(retInt=false) {
 }
 
 private setSecurityMode(mode) {
-    log.info "Setting the Smart Home Monitor Mode to (${mode})..."
+    logInfo("Setting the Smart Home Monitor Mode to (${mode})...")
     sendLocationEvent(name: 'alarmSystemStatus', value: mode.toString())
 }
 
@@ -804,11 +847,9 @@ def lanEventHandler(evt) {
             }
         }
     } catch (ex) {
-        log.error "lanEventHandler Exception:", ex
+        logError "lanEventHandler Exception:", ex
     }
 }
-
-
 
 def deviceCommand() {
     // log.info("Command Request: $params")
@@ -818,43 +859,43 @@ def deviceCommand() {
 }
 
 private processCmd(devId, cmd, value1, value2, local=false) {
-    log.info("Process Command${local ? "(LOCAL)" : ""} | DeviceId: $devId | Command: ($cmd)${value1 ? " | Param1: ($value1)" : ""}${value2 ? " | Param2: ($value2)" : ""}")
+    logInfo("Process Command${local ? "(LOCAL)" : ""} | DeviceId: $devId | Command: ($cmd)${value1 ? " | Param1: ($value1)" : ""}${value2 ? " | Param2: ($value2)" : ""}")
     def device = findDevice(devId)
     def command = cmd
     if(settings?.addSecurityDevice != false && devId == "alarmSystemStatus_${location?.id}") {
         setSecurityMode(command)
         CommandReply("Success", "Security Alarm, Command $command")
     }  else if (settings?.modeList && command == "mode" && devId) {
-        log.debug("Virtual Mode Received: ${devId}")
+        logDebug("Virtual Mode Received: ${devId}")
         changeMode(devId)
         CommandReply("Success", "Mode Device, Command $command")
     } else if (settings?.routineList && command == "routine" && devId) {
-        log.debug("Virtual Routine Received: ${devId}")
+        logDebug("Virtual Routine Received: ${devId}")
         runRoutine(devId)
         CommandReply("Success", "Routine Device, Command $command")
     } else {
         if (!device) {
-            log.error("Device Not Found")
+            logError("Device Not Found")
             CommandReply("Failure", "Device Not Found")
         } else if (!device?.hasCommand(command as String)) {
-            log.error("Device ${device.displayName} does not have the command $command")
+            logError("Device ${device.displayName} does not have the command $command")
             CommandReply("Failure", "Device ${device.displayName} does not have the command $command")
         } else {
             try {
                 if (value2 != null) {
                     device?."$command"(value1,value2)
-                    log.info("Command Successful for Device ${device.displayName} | Command ${command}($value1, $value2)")
+                    logInfo("Command Successful for Device ${device.displayName} | Command ${command}($value1, $value2)")
                 } else if (value1 != null) {
                     device?."$command"(value1)
-                    log.info("Command Successful for Device ${device.displayName} | Command ${command}($value1)")
+                    logInfo("Command Successful for Device ${device.displayName} | Command ${command}($value1)")
                 } else {
                     device?."$command"()
-                    log.info("Command Successful for Device ${device.displayName} | Command ${command}()")
+                    logInfo("Command Successful for Device ${device.displayName} | Command ${command}()")
                 }
                 CommandReply("Success", "Device ${device.displayName} | Command ${command}()")
                 logCmd([cmd: command, device: device?.displayName, value1: value1, value2: value2])
             } catch (e) {
-                log.error("Error Occurred for Device ${device.displayName} | Command ${command}()")
+                logError("Error Occurred for Device ${device.displayName} | Command ${command}()")
                 CommandReply("Failure", "Error Occurred For Device ${device.displayName} | Command ${command}()")
             }
         }
@@ -866,10 +907,10 @@ def changeMode(modeId) {
     if(modeId) {
         def mode = findVirtModeDevice(modeId)
         if(mode) {
-            log.info"Setting the Location Mode to (${mode})..."
+            logInfo("Setting the Location Mode to (${mode})...")
             setLocationMode(mode)
             state?.lastMode = mode
-        } else { log.error("Unable to find a matching mode for the id: ${modeId}") }
+        } else { logError("Unable to find a matching mode for the id: ${modeId}") }
     }
 }
 
@@ -877,9 +918,9 @@ def runRoutine(rtId) {
     if(rtId) {
         def rt = findVirtRoutineDevice(rtId)
         if(rt?.label) {
-            log.info "Executing the (${rt?.label}) Routine..."
+            logInfo("Executing the (${rt?.label}) Routine...")
             location?.helloHome?.execute(rt?.label)
-        } else { log.error("Unable to find a matching routine for the id: ${rtId}") }
+        } else { logError("Unable to find a matching routine for the id: ${rtId}") }
     }
 }
 
@@ -924,7 +965,7 @@ def deviceQuery() {
                     attributes: ["switch": attrVal]
                 ])
             } catch (e) {
-                log.error("Error Occurred Parsing ${item} ${type} ${name}, Error " + e.message)
+                logError("Error Occurred Parsing ${item} ${type} ${name}, Error: ${ex}")
             }
         }
     }
@@ -943,64 +984,71 @@ def deviceQuery() {
 }
 
 def deviceCapabilityList(device) {
-    def items = device?.capabilities?.findAll{ !(it?.name in ignoreLists()?.capabilities) }?.collectEntries { capability-> [ (capability?.name):1 ] }
-    // ["Health Check", "Ultraviolet Index", "Indicator"]?.each { if(it in items) { items?.remove(it as String) } }
-    if(settings?.lightList?.find { it?.id == device?.id }) {
-        items["LightBulb"] = 1
+    String devId = device?.getId()
+    def capItems = device?.capabilities?.findAll{ !(it?.name in ignoreLists()?.capabilities) }?.collectEntries { capability-> [ (capability?.name as String):1 ] }
+    if(isDeviceInInput("lightList", device?.id)) {
+        capItems["LightBulb"] = 1
     }
-    if(settings?.buttonList?.find { it?.id == device?.id }) {
-        items["Button"] = 1
+    if(isDeviceInInput("buttonList", device?.id)) {
+        capItems["Button"] = 1
     }
-    if(settings?.fanList?.find { it?.id == device?.id }) {
-        items["Fan"] = 1
+    if(isDeviceInInput("fanList", device?.id)) {
+        capItems["Fan"] = 1
     }
-    if(settings?.speakerList?.find { it?.id == device?.id }) {
-        items["Speaker"] = 1
+    if(isDeviceInInput("speakerList", device?.id)) {
+        capItems["Speaker"] = 1
     }
-    if(settings?.shadesList?.find { it?.id == device?.id }) {
-        items["Window Shade"] = 1
+    if(isDeviceInInput("shadesList", device?.id)) {
+        capItems["Window Shade"] = 1
     }
-    if(settings?.tstatHeatList?.find { it?.id == device?.id }) {
-        items?.remove("Thermostat Cooling Setpoint")
+    if(isDeviceInInput("garageList", device?.id)) {
+        capItems["Garage Door Control"] = 1
     }
-    if(settings?.noTemp && items["Temperature Measurement"] && (items["Contact Sensor"] || items["Water Sensor"])) {
+    if(isDeviceInInput("tstatList", device?.id)) {
+        capItems["Thermostat"] = 1
+        capItems["Thermostat Operating State"] = 1
+    }
+    if(isDeviceInInput("tstatHeatList", device?.id)) {
+        capItems["Thermostat"] = 1
+        capItems["Thermostat Operating State"] = 1
+        capItems?.remove("Thermostat Cooling Setpoint")
+    }
+    if(settings?.noTemp && capItems["Temperature Measurement"] && (capItems["Contact Sensor"] || capItems["Water Sensor"])) {
         Boolean remTemp = true
-        if(settings?.sensorAllowTemp) {
-            List aItems = settings?.sensorAllowTemp?.collect { it?.getId() as String } ?: []
-            if(aItems?.contains(device?.id as String)) { remTemp = false }
-        }
-        if(remTemp) { items?.remove("Temperature Measurement") }
+        if(settings?.sensorAllowTemp && isDeviceInInput("sensorAllowTemp", device?.id)) remTemp = false
+        if(remTemp) { capItems?.remove("Temperature Measurement") }
     }
-    if(settings?.removeBattery && items["Battery"] && isDeviceInInput('removeBattery', device?.id)) { items?.remove("Battery"); if(showDebugLogs) { log.debug "Filtering Battery"; } }
-    if(settings?.removeButton && items["Button"] && isDeviceInInput('removeButton', device?.id)) { items?.remove("Button");  if(showDebugLogs) { log.debug "Filtering Button"; } }
-    if(settings?.removeContact && items["Contact Sensor"] && isDeviceInInput('removeContact', device?.id)) { items?.remove("Contact Sensor");  if(showDebugLogs) { log.debug "Filtering Contact"; } }
-    if(settings?.removeEnergy && items["Energy Meter"] && isDeviceInInput('removeEnergy', device?.id)) { items?.remove("Energy Meter");  if(showDebugLogs) { log.debug "Filtering Energy"; } }
-    if(settings?.removeHumidity && items["Relative Humidity Measurement"] && isDeviceInInput('removeHumidity', device?.id)) { items?.remove("Relative Humidity Measurement");  if(showDebugLogs) { log.debug "Filtering Humidity"; } }
-    if(settings?.removeIlluminance && items["Illuminance Measurement"] && isDeviceInInput('removeIlluminance', device?.id)) { items?.remove("Illuminance Measurement");  if(showDebugLogs) { log.debug "Filtering Illuminance"; } }
-    if(settings?.removeLevel && items["Switch Level"] && isDeviceInInput('removeLevel', device?.id)) { items?.remove("Switch Level");  if(showDebugLogs) { log.debug "Filtering Level"; } }
-    if(settings?.removeLock && items["Lock"] && isDeviceInInput('removeLock', device?.id)) { items?.remove("Lock");  if(showDebugLogs) { log.debug "Filtering Lock"; } }
-    if(settings?.removeMotion && items["Motion Sensor"] && isDeviceInInput('removeMotion', device?.id)) { items?.remove("Motion Sensor");  if(showDebugLogs) { log.debug "Filtering Motion"; } }
-    if(settings?.removePower && items["Power Meter"] && isDeviceInInput('removePower', device?.id)) { items?.remove("Power Meter");  if(showDebugLogs) { log.debug "Filtering Power Meter"; } }
-    if(settings?.removePresence && items["Presence Sensor"] && isDeviceInInput('removePresence', device?.id)) { items?.remove("Presence Sensor");  if(showDebugLogs) { log.debug "Filtering Presence"; } }
-    if(settings?.removeSwitch && items["Switch"] && isDeviceInInput('removeSwitch', device?.id)) { items?.remove("Switch");  if(showDebugLogs) { log.debug "Filtering Switch"; } }
-    if(settings?.removeTamper && items["Tamper Alert"] && isDeviceInInput('removeTamper', device?.id)) { items?.remove("Tamper Alert");  if(showDebugLogs) { log.debug "Filtering Tamper"; } }
-    if(settings?.removeTemp && items["Temperature Measurement"] && isDeviceInInput('removeTemp', device?.id)) { items?.remove("Temperature Measurement");  if(showDebugLogs) { log.debug "Filtering Temp"; } }
-    if(settings?.removeValve && items["Valve"] && isDeviceInInput('removeValve', device?.id)) { items?.remove("Valve");  if(showDebugLogs) { log.debug "Filtering Valve"; } }
-    return items
+
+    //This will filter out selected capabilities from the devices selected in filtering inputs.
+    Map remCaps = [
+       "Acceleration": "Acceleration Sensor", "Battery": "Battery", "Button": "Button", "Contact": "Contact Sensor", "Energy": "Energy Meter", "Humidity": "Relative Humidity Measurement",
+       "Illuminance": "Illuminance Measurement", "Level": "Switch Level", "Lock": "Lock", "Motion": "Motion Sensor", "Power": "Power Meter", "Presence": "Presence Sensor", "Switch": "Switch",
+       "Tamper": "Tamper Alert", "Temp": "Temperature Measurement", "Valve": "Valve"
+    ]
+    List remKeys = settings?.findAll { it?.key?.toString()?.startsWith("remove") && it?.value != null }?.collect { it?.key as String } ?: []
+    remKeys?.each { k->
+        String capName = k?.replaceAll("remove", "")
+        if(remCaps[capName] && capItems[remCaps[capName]] && isDeviceInInput(k, device?.id)) { capItems?.remove(remCaps[capName]);  if(showDebugLogs) { logDebug("Filtering ${capName}"); } }
+    }
+    return capItems
 }
 
 def deviceCommandList(device) {
-    return device?.supportedCommands?.findAll { !(it?.name in ignoreLists()?.commands) }?.collectEntries { command-> [ (command?.name): 1 ] }
+    def cmds = device?.supportedCommands?.findAll { !(it?.name in ignoreLists()?.commands) }?.collectEntries { c-> [ (c?.name): 1 ] }
+    if(isDeviceInInput("tstatHeatList", device?.id)) { cmds?.remove("setCoolingSetpoint"); cmds?.remove("auto"); cmds?.remove("cool"); }
+    return cmds
 }
 
 def deviceAttributeList(device) {
-    return device?.supportedAttributes?.findAll { !(it?.name in ignoreLists()?.attributes) }?.collectEntries { attribute->
+    def atts = device?.supportedAttributes?.findAll { !(it?.name in ignoreLists()?.attributes) }?.collectEntries { attribute->
         try {
             [(attribute?.name): device?.currentValue(attribute?.name)]
         } catch(e) {
             [(attribute?.name): null]
         }
     }
+    if(isDeviceInInput("tstatHeatList", device?.id)) { atts?.remove("coolingSetpoint"); atts?.remove("coolingSetpointRange"); }
+    return atts
 }
 
 String getAppEndpointUrl(subPath) { return "${apiServerUrl("/api/smartapps/installations/${app.id}${subPath ? "/${subPath}" : ""}?access_token=${atomicState?.accessToken}")}" }
@@ -1020,7 +1068,8 @@ def checkForMissedRegistration() {
 Map deviceSettingKeys() {
     return [
         "fanList": "Fan Devices", "fan3SpdList": "Fans (3Spd) Devices", "fan4SpdList": "Fans (4Spd) Devices", "buttonList": "Button Devices", "deviceList": "Other Devices",
-        "sensorList": "Sensor Devices", "speakerList": "Speaker Devices", "switchList": "Switch Devices", "lightList": "Light Devices", "shadesList": "Window Shade Devices"
+        "sensorList": "Sensor Devices", "speakerList": "Speaker Devices", "switchList": "Switch Devices", "lightList": "Light Devices", "shadesList": "Window Shade Devices",
+        "garageList": "Garage Devices", "tstatList":"T-Stat Devices", "tstatHeatList": "T-Stat Devices (Heat)"
     ]
 }
 
@@ -1070,7 +1119,7 @@ private registerDevicesTest() {
         state?.remove("pendingDeviceRegistrationRnd")
 
         if(settings?.restartService == true) {
-            log.warn "Sent Request to Homebridge Service to Stop... Service should restart automatically"
+            logWarn("Sent Request to Homebridge Service to Stop... Service should restart automatically")
             attemptServiceRestart()
             settingUpdate("restartService", "false", "bool")
         }
@@ -1082,7 +1131,7 @@ private registerDevicesTest() {
 def registerDevices() {
     //This has to be done at startup because it takes too long for a normal command.
     ["lightList": "Light Devices", "fanList": "Fan Devices", "fan3SpdList": "Fans (3SPD) Devices", "fan4SpdList": "Fans (4SPD) Devices", "buttonList": "Button Devices"]?.each { k,v->
-        if(showDebugLogs) log.debug "Registering (${settings?."${k}"?.size() ?: 0}) ${v}"
+        logDebug("Registering (${settings?."${k}"?.size() ?: 0}) ${v}")
         registerChangeHandler(settings?."${k}")
     }
     runIn(3, "registerDevices2")
@@ -1091,7 +1140,7 @@ def registerDevices() {
 def registerDevices2() {
     //This has to be done at startup because it takes too long for a normal command.
     ["sensorList": "Sensor Devices", "speakerList": "Speaker Devices", "deviceList": "Other Devices"]?.each { k,v->
-        if(showDebugLogs) log.debug "Registering (${settings?."${k}"?.size() ?: 0}) ${v}"
+        logDebug("Registering (${settings?."${k}"?.size() ?: 0}) ${v}")
         registerChangeHandler(settings?."${k}")
     }
     runIn(3, "registerDevices3")
@@ -1099,15 +1148,15 @@ def registerDevices2() {
 
 def registerDevices3() {
     //This has to be done at startup because it takes too long for a normal command.
-    ["switchList": "Switch Devices", "shadesList": "Window Shade Devices", "tstatHeatList": "Thermostat (HeatOnly) Devices"]?.each { k,v->
-        if(showDebugLogs) log.debug "Registering (${settings?."${k}"?.size() ?: 0}) ${v}"
+    ["switchList": "Switch Devices", "shadesList": "Window Shade Devices", "garageList": "Garage Door Devices", "tstatList": "Thermostat Devices", "tstatHeatList": "Thermostat (HeatOnly) Devices"]?.each { k,v->
+        logDebug("Registering (${settings?."${k}"?.size() ?: 0}) ${v}")
         registerChangeHandler(settings?."${k}")
     }
-    log.info "Registered (${getDeviceCnt(true)} Devices)"
-    if(showDebugLogs) log.info "-----------------------------------------------"
+    logDebug("Registered (${getDeviceCnt(true)} Devices)")
+    logDebug("-----------------------------------------------")
 
     if(settings?.restartService == true) {
-        log.warn "Sent Request to Homebridge Service to Stop... Service should restart automatically"
+        logWarn("Sent Request to Homebridge Service to Stop... Service should restart automatically")
         attemptServiceRestart()
         settingUpdate("restartService", "false", "bool")
     }
@@ -1117,8 +1166,7 @@ def registerDevices3() {
 
 Boolean isDeviceInInput(setKey, devId) {
     if(settings[setKey]) {
-        List aItems = settings[setKey] ? settings[setKey]?.collect { it?.getId() as String } : []
-        if(aItems?.contains(devId as String)) { return true }
+        return (settings[setKey]?.find { it?.getId() == devId })
     }
     return false
 }
@@ -1136,22 +1184,11 @@ def registerChangeHandler(devices, showlog=false) {
                     }
                     if(skipAtt) { return }
                 }
-                if(att == "battery" &&      isDeviceInInput('removeBattery', device?.id)) {return}
-                if(att == "button" &&       isDeviceInInput('removeButton', device?.id)) {return}
-                if(att == "switch" &&       isDeviceInInput('removeSwitch', device?.id)) {return}
-                if(att == "temperature" &&  isDeviceInInput('removeTemp', device?.id)) {return}
-                if(att == "contact" &&      isDeviceInInput('removeContact', device?.id)) {return}
-                if(att == "energy" &&       isDeviceInInput('removeEnergy', device?.id)) {return}
-                if(att == "humidity" &&     isDeviceInInput('removeHumidity', device?.id)) {return}
-                if(att == "illuminance" &&  isDeviceInInput('removeIlluminance', device?.id)) {return}
-                if(att == "level" &&        isDeviceInInput('removeLevel', device?.id)) { return }
-                if(att == "lock" &&         isDeviceInInput('removeLock', device?.id)) { return }
-                if(att == "motion" &&       isDeviceInInput('removeMotion', device?.id)) { return }
-                if(att == "power" &&        isDeviceInInput('removePower', device?.id)) { return }
-                if(att == "presence" &&     isDeviceInInput('removePresence', device?.id)) { return }
-                if(att == "tamper" &&       isDeviceInInput('removeTamper', device?.id)) { return }
-                if(att == "valve" &&        isDeviceInInput('removeValve', device?.id)) { return }
-
+                Map attMap = [
+                    "acceleration": "Acceleration", "battery": "Battery", "button": "Button", "contact": "Contact", "energy": "Energy", "humidity": "Humidity", "illuminance": "Illuminance",
+                    "level": "Level", "lock": "Lock", "motion": "Motion", "power": "Power", "presence": "Presence", "switch": "Switch", "tamper": "Tamper",
+                    "temperature": "Temp", "valve": "Valve"
+                ]?.each { k,v -> if(att == k && isDeviceInInput('remove${v}', device?.id)) { return } }
                 subscribe(device, att, "changeHandler")
                 if(showlog) { log.debug "Registering ${device?.displayName} for ${att} events" }
             }
@@ -1237,7 +1274,7 @@ def changeHandler(evt) {
                         unitStr = "${send?.evtUnit}"
                         break
                 }
-                log.debug "Sending${" ${send?.evtSource}" ?: ""} Event (${send?.evtDeviceName} | ${send?.evtAttr.toUpperCase()}: ${send?.evtValue}${unitStr}) ${send?.evtData ? "Data: ${send?.evtData}" : ""} to Homebridge at (${state?.pluginDetails?.directIP}:${state?.pluginDetails?.directPort})"
+                logDebug("Sending${" ${send?.evtSource}" ?: ""} Event (${send?.evtDeviceName} | ${send?.evtAttr.toUpperCase()}: ${send?.evtValue}${unitStr}) ${send?.evtData ? "Data: ${send?.evtData}" : ""} to Homebridge at (${state?.pluginDetails?.directIP}:${state?.pluginDetails?.directPort})")
             }
             sendHttpPost("update", [
                 change_name: send?.evtDeviceName,
@@ -1328,7 +1365,7 @@ Boolean devMode() {
 }
 
 private activateDirectUpdates(isLocal=false) {
-    log.trace "activateDirectUpdates: ${getServerAddress()}${isLocal ? " | (Local)" : ""}"
+    logTrace("activateDirectUpdates: ${getServerAddress()}${isLocal ? " | (Local)" : ""}")
     sendHttpPost("initial", [
         app_id: app?.getId(),
         access_token: atomicState?.accessToken
@@ -1336,7 +1373,7 @@ private activateDirectUpdates(isLocal=false) {
 }
 
 private attemptServiceRestart(isLocal=false) {
-    log.trace "attemptServiceRestart: ${getServerAddress()}${isLocal ? " | (Local)" : ""}"
+    logTrace("attemptServiceRestart: ${getServerAddress()}${isLocal ? " | (Local)" : ""}")
     sendHttpPost("restart", [
         app_id: app?.getId(),
         access_token: atomicState?.accessToken
@@ -1344,7 +1381,7 @@ private attemptServiceRestart(isLocal=false) {
 }
 
 private sendDeviceRefreshCmd(isLocal=false) {
-    log.trace "sendDeviceRefreshCmd: ${getServerAddress()}${isLocal ? " | (Local)" : ""}"
+    logTrace("sendDeviceRefreshCmd: ${getServerAddress()}${isLocal ? " | (Local)" : ""}")
     sendHttpPost("refreshDevices", [
         app_id: app?.getId(),
         access_token: atomicState?.accessToken
@@ -1352,7 +1389,7 @@ private sendDeviceRefreshCmd(isLocal=false) {
 }
 
 private updateServicePrefs(isLocal=false) {
-    log.trace "updateServicePrefs: ${getServerAddress()}${isLocal ? " | (Local)" : ""}"
+    logTrace("updateServicePrefs: ${getServerAddress()}${isLocal ? " | (Local)" : ""}")
     sendHttpPost("updateprefs", [
         app_id: app?.getId(),
         access_token: atomicState?.accessToken,
@@ -1438,11 +1475,14 @@ def appInfoSect() {
 String bulletItem(String inStr, String strVal) { return "${inStr == "" ? "" : "\n"} \u2022 ${strVal}" }
 String dashItem(String inStr, String strVal, newLine=false) { return "${(inStr == "" && !newLine) ? "" : "\n"} - ${strVal}" }
 String textDonateLink() { return "https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=RVFJTG8H86SK8&source=url" }
-Integer versionStr2Int(str) { return str ? str?.toString().tokenize("-")[0]?.replaceAll("\\.", "")?.toInteger() : null }
+Integer versionStr2Int(str) { return str ? str?.toString()?.tokenize("-")[0]?.replaceAll("\\.", "")?.toInteger() : null }
+String versionCleanup(str) { return str ? str?.toString()?.tokenize("-")[0] : null }
 Boolean codeUpdIsAvail(String newVer, String curVer, String type) {
     Boolean result = false
     def latestVer
     if(newVer && curVer) {
+        newVer = versionCleanup(newVer)
+        curVer = versionCleanup(curVer)
         List versions = [newVer, curVer]
         if(newVer != curVer) {
             latestVer = versions?.max { a, b ->
@@ -1450,7 +1490,7 @@ Boolean codeUpdIsAvail(String newVer, String curVer, String type) {
                 for (int i = 0; i < commonIndices; ++i) { if(verA[i]?.toInteger() != verB[i]?.toInteger()) { return verA[i]?.toInteger() <=> verB[i]?.toInteger() }; }
                 verA?.size() <=> verB?.size()
             }
-            result = (latestVer == newVer) ? true : false
+            result = (latestVer == newVer)
         }
     }
     return result
@@ -1466,7 +1506,7 @@ private Map getMinVerUpdsRequired() {
         try {
             if(codeItems?.containsKey(k as String) && v != null && (versionStr2Int(v) < minVersions()[k as String])) { updRequired = true; updItems?.push(codeItems[k]); }
         } catch (ex) {
-            log.error "getMinVerUpdsRequired Error: ${ex}"
+            logError("getMinVerUpdsRequired Error: ${ex}")
         }
     }
     return [updRequired: updRequired, updItems: updItems]
@@ -1553,7 +1593,7 @@ private getConfigData() {
     if(data) {
         state?.appData = data
         updTsVal("lastAppDataUpdDt")
-        if(showDebugLogs) log.debug("Successfully Retrieved (v${data?.appDataVer}) of AppData Content from GitHub Repo...")
+        logDebug("Successfully Retrieved (v${data?.appDataVer}) of AppData Content from GitHub Repo...")
     }
 }
 
@@ -1568,8 +1608,8 @@ private getWebData(params, desc, text=true) {
     } catch (ex) {
         incrementCntByKey("appErrorCnt")
         if(ex instanceof groovyx.net.http.HttpResponseException) {
-            log.warn("${desc} file not found")
-        } else { log.error("getWebData(params: $params, desc: $desc, text: $text) Exception: ${ex}") }
+            logWarn("${desc} file not found")
+        } else { logError("getWebData(params: $params, desc: $desc, text: $text) Exception: ${ex}") }
         return "${label} info not found"
     }
 }
@@ -1598,7 +1638,7 @@ def GetTimeDiffSeconds(lastDate, sender=null) {
         def diff = (int) (long) (stop - start) / 1000
         return diff?.abs()
     } catch (ex) {
-        log.error("GetTimeDiffSeconds Exception: (${sender ? "$sender | " : ""}lastDate: $lastDate): ${ex}")
+        logError("GetTimeDiffSeconds Exception: (${sender ? "$sender | " : ""}lastDate: $lastDate): ${ex}")
         return 10000
     }
 }
@@ -1606,18 +1646,17 @@ def GetTimeDiffSeconds(lastDate, sender=null) {
 /******************************************
 |       Changelog Logic
 ******************************************/
-Boolean showDonationOk() { return (state?.isInstalled && !atomicState?.installData?.shownDonation && getDaysSinceUpdated() >= 30 && !settings?.sentDonation) ? true : false }
+Boolean showDonationOk() { return (state?.isInstalled && !atomicState?.installData?.shownDonation && getDaysSinceUpdated() >= 30 && !settings?.sentDonation) }
 Integer getDaysSinceUpdated() {
     def updDt = atomicState?.installData?.updatedDt ?: null
     if(updDt == null || updDt == "Not Set") {
         updInstData("updatedDt", getDtNow().toString())
         return 0
-    } else {
-        def start = Date.parse("E MMM dd HH:mm:ss z yyyy", updDt)
-        def stop = new Date()
-        if(start && stop) {	return (stop - start) }
-        return 0
     }
+    def start = Date.parse("E MMM dd HH:mm:ss z yyyy", updDt)
+    def stop = new Date()
+    if(start && stop) {	return (stop - start) }
+    return 0
 }
 
 String changeLogData() { return getWebData([uri: "https://raw.githubusercontent.com/tonesto7/homebridge-smartthings-v2/master/CHANGELOG-app.md", contentType: "text/plain; charset=UTF-8"], "changelog") }
@@ -1643,6 +1682,32 @@ private addToHistory(String logKey, data, Integer max=10) {
     eData?.push([dt: getDtNow(), data: data])
     if(!ssOk || eData?.size() > max) { eData = eData?.drop( (eData?.size()-max) ) }
     atomicState[logKey as String] = eData
+}
+
+private logDebug(msg) { if(showDebugLogs) { logToServer(msg, "debug"); log.debug "Homebridge (v${appVersion()}) | ${msg}"; } }
+private logInfo(msg) { logToServer(msg, "info"); log.info " Homebridge (v${appVersion()}) | ${msg}"; }
+private logTrace(msg) { logToServer(msg, "trace"); log.trace "Homebridge (v${appVersion()}) | ${msg}"; }
+private logWarn(msg) { logToServer(msg, "warn"); log.warn " Homebridge (v${appVersion()}) | ${msg}"; }
+private logError(msg) { logToServer(msg, "error"); log.error "Homebridge (v${appVersion()}) | ${msg}"; }
+
+public String getLogServerAddr() { return appSettings?.log_address ?: null }
+public logToServer(msg, lvl) {
+    String addr = parent ? parent?.getLogServerAddr() : getLogServerAddr()
+    if(addr) {
+        Map params = [
+            method: "POST",
+            path: "/gelf",
+            headers: [
+                HOST: addr,
+                'Content-Type': "application/json"
+            ],
+            body: [short_message: msg, logLevel: lvl, host: "SmartThings (HomebridgeV2)"]
+        ]
+        params?.body?.appVersion = appVersion(); params?.body?.appName = app?.getName(); params?.body?.appLabel = app?.getLabel();
+        // params?.body?.devVersion = devVersion(); params?.body?.deviceHandler = device?.getName(); params?.body?.deviceName = device?.displayName;
+        def result = new physicalgraph.device.HubAction(params)
+        sendHubCommand(result)
+    }
 }
 
 List getCmdHistory() { return atomicState?.cmdHistory ?: [] }

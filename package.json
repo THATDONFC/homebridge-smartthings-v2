@@ -1,6 +1,6 @@
 {
     "dependencies": {
-        "@sentry/node": "^5.12.3",
+        "@sentry/node": "^5.12.4",
         "body-parser": "^1.19.0",
         "chalk": "^3.0.0",
         "compare-versions": "^3.6.0",
@@ -19,7 +19,7 @@
         "eslint": "^6.8.0",
         "eslint-config-prettier": "^6.10.0",
         "eslint-plugin-prettier": "^3.1.2",
-        "lint-staged": "^10.0.7",
+        "lint-staged": "^10.0.8",
         "prettier": "^1.19.1"
     },
     "description": "SmartThings plugin for HomeBridge",
@@ -60,5 +60,5 @@
     "bugs": {
         "url": "http://github.com/tonesto7/homebridge-smartthings-v2/issues"
     },
-    "version": "2.3.0-beta.1"
+    "version": "2.3.2"
 }

@@ -19,6 +19,7 @@ const {
     portFinderSync = require('portfinder-sync');
 
 var PlatformAccessory;
+var sentryEnabled = false;
 
 module.exports = class ST_Platform {
     constructor(log, config, api) {
@@ -32,6 +33,7 @@ module.exports = class ST_Platform {
             log(`${platformName} Plugin is not Configured | Skipping...`);
             return;
         }
+        sentryEnabled = this.getSentryAllowed();
         this.Sentry = this.initializeErrorReporting(config);
         this.ok2Run = true;
         this.direct_port = this.findDirectPort();
@@ -41,7 +43,7 @@ module.exports = class ST_Platform {
         this.log = this.logging.getLogger();
         this.log.info(`Homebridge Version: ${api.version}`);
         this.log.info(`${platformName} Plugin Version: ${pluginVersion}`);
-        this.log.info(`Sentry MachineId: ${machineId}`);
+        if (sentryEnabled) this.log.info(`Sentry MachineId: ${machineId}`);
         this.polling_seconds = config.polling_seconds || 3600;
         this.excludedAttributes = this.config.excluded_attributes || [];
         this.excludedCapabilities = this.config.excluded_capabilities || [];
@@ -55,17 +57,20 @@ module.exports = class ST_Platform {
         this.client = new SmartThingsClient(this);
         this.SmartThingsAccessories = new SmartThingsAccessories(this);
         this.homebridge.on("didFinishLaunching", this.didFinishLaunching.bind(this));
-        this.myUtils.checkVersion()
-            .then((res) => {
-                this.appEvts.emit('event:plugin_upd_status', res);
-            });
+        this.appEvts.emit('event:plugin_upd_status');
     }
 
     initializeErrorReporting(cfg) {
-        if (cfg.disableErrorReporting !== false) {
-            Sentry.init({ dsn: 'https://c126c2d965e84da8af105d80c5e92474@sentry.io/1878896', release: `${pluginName}@${pluginVersion}`, attachStacktrace: true });
+        if (sentryEnabled && cfg.disableErrorReporting !== false) {
+            Sentry.init({
+                dsn: 'https://c126c2d965e84da8af105d80c5e92474@sentry.io/1878896',
+                release: `${pluginName}@${pluginVersion}`,
+                attachStacktrace: true
+            });
             Sentry.configureScope((scope) => {
-                scope.setUser({ id: machineId });
+                scope.setUser({
+                    id: machineId
+                });
                 scope.setTag("username", os.userInfo().username);
                 scope.setTag("node", process.version);
                 scope.setTag("version", pluginVersion);
@@ -79,12 +84,13 @@ module.exports = class ST_Platform {
             Sentry.Integrations.ExtraErrorData;
             return Sentry;
         } else {
+            sentryEnabled = false;
             return undefined;
         }
     }
 
     sentryErrorEvent(err) {
-        if (this.configItems.disableErrorReporting && this.Sentry) {
+        if (this.sentryEnabled && this.Sentry) {
             this.Sentry.captureException(err);
         }
     }
@@ -100,7 +106,12 @@ module.exports = class ST_Platform {
                 enabled: (config.logConfig.file.enabled === true),
                 level: (config.logConfig.file.level || 'good')
             }
-        } : { debug: false, showChanges: true, hideTimestamp: false, hideNamePrefix: false };
+        } : {
+            debug: false,
+            showChanges: true,
+            hideTimestamp: false,
+            hideNamePrefix: false
+        };
     }
 
     findDirectPort() {
@@ -189,6 +200,7 @@ module.exports = class ST_Platform {
                         that.log.alert(`Total Initialization Time: (${Math.round((new Date() - starttime) / 1000)} seconds)`);
                         that.log.notice(`Unknown Capabilities: ${JSON.stringify(that.unknownCapabilities)}`);
                         that.log.info(`${platformDesc} DeviceCache Size: (${Object.keys(this.SmartThingsAccessories.getAllAccessoriesFromCache()).length})`);
+                        if (src !== 'First Launch') this.appEvts.emit('event:plugin_upd_status');
                         resolve(true);
                     });
 
@@ -250,8 +262,30 @@ module.exports = class ST_Platform {
         }
     }
 
+    getSentryAllowed() {
+        return new Promise((resolve) => {
+            const axios = require('axios').default;
+            axios({
+                    method: 'get',
+                    url: `https://raw.githubusercontent.com/tonesto7/homebridge-smartthings-v2/master/appData.json`,
+                    timeout: 10000
+                })
+                .then((response) => {
+                    sentryEnabled = (response && response.data && response.data.settings && response.data.settings.disableSentry === false);
+                    resolve(sentryEnabled);
+                })
+                .catch((err) => {
+                    this.handleError('getDevice', err);
+                    sentryEnabled = false;
+                    resolve(false);
+                });
+        });
+    }
+
     isValidRequestor(access_token, app_id, src) {
-        if (this.configItems.validateTokenId !== true) { return true; }
+        if (this.configItems.validateTokenId !== true) {
+            return true;
+        }
         if (app_id && access_token && (access_token === this.getConfigItems().access_token) && (app_id === this.getConfigItems().app_id)) return true;
         this.log.error(`(${src}) | We received a request from a client that didn't provide a valid access_token and app_id`);
         return false;
@@ -324,7 +358,9 @@ module.exports = class ST_Platform {
                                 break;
                         }
 
-                    } else { res.send('Error: Missing Valid Debug Query Parameter'); }
+                    } else {
+                        res.send('Error: Missing Valid Debug Query Parameter');
+                    }
                 });
 
                 webApp.post("/restartService", (req, res) => {
